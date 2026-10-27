@@ -54,12 +54,12 @@ router
         .withMessage(`Term must be one of: ${TERMS.join(', ')}`),
       body('continuousAssessment')
         .optional()
-        .isFloat({ min: 0, max: 40 })
-        .withMessage('Continuous assessment must be between 0 and 40'),
+        .isFloat({ min: 0, max: 30 })
+        .withMessage('Continuous assessment must be between 0 and 30'),
       body('examScore')
         .optional()
-        .isFloat({ min: 0, max: 60 })
-        .withMessage('Exam score must be between 0 and 60'),
+        .isFloat({ min: 0, max: 70 })
+        .withMessage('Exam score must be between 0 and 70'),
     ],
     validate,
     createScore

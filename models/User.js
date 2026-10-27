@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { ROLES } = require('../utils/constants');
+const { ROLES, GRADE_LEVELS } = require('../utils/constants');
 
 const UserSchema = new mongoose.Schema(
   {
@@ -37,6 +37,11 @@ const UserSchema = new mongoose.Schema(
     studentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Student',
+    },
+    // Class/grade an admin (teacher) is responsible for; unused for other roles
+    assignedGrade: {
+      type: String,
+      enum: GRADE_LEVELS,
     },
     isActive: {
       type: Boolean,
@@ -92,6 +97,7 @@ UserSchema.methods.toProfileJSON = function () {
     isActive: this.isActive,
     mustChangePassword: this.mustChangePassword,
     studentId: this.studentId,
+    assignedGrade: this.assignedGrade,
     createdAt: this.createdAt,
   };
 };

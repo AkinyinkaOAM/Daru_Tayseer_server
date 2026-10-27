@@ -8,6 +8,16 @@ const { sendUserCredentialsEmail } = require('../services/emailService');
 
 const generateTemporaryPassword = () => crypto.randomBytes(9).toString('base64url');
 
+// A class/grade can only be assigned to one admin (teacher) at a time.
+const findTeacherAssignedToGrade = async (grade, excludeUserId) => {
+  if (!grade) return null;
+  return User.findOne({
+    role: ROLES.ADMIN,
+    assignedGrade: grade,
+    ...(excludeUserId ? { _id: { $ne: excludeUserId } } : {}),
+  });
+};
+
 const logAudit = async ({ actorId, action, targetUserId, changes = {}, metadata = {} }) => {
   try {
     await AuditLog.create({
@@ -80,14 +90,14 @@ const getUser = asyncHandler(async (req, res) => {
  * @access  Private/SuperSuperAdmin, SuperAdmin
  */
 const createUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, role } = req.body;
+  const { name, email, phone, role, assignedGrade } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
 
   // Validate role assignment permissions
-  if (req.user.role === ROLES.SUPER_ADMIN && role === ROLES.SUPER_SUPER_ADMIN) {
+  if (req.user.role === ROLES.SUPER_ADMIN && role !== ROLES.ADMIN && role) {
     return ApiResponse.error(
       res,
-      'Super Admin cannot create a Super Super Admin account.',
+      'Super Admin can only create Admin/Teacher accounts.',
       403
     );
   }
@@ -98,13 +108,26 @@ const createUser = asyncHandler(async (req, res) => {
     return ApiResponse.error(res, 'A user with this email already exists.', 400);
   }
 
+  const effectiveRole = role || ROLES.ADMIN;
+  if (effectiveRole === ROLES.ADMIN && assignedGrade) {
+    const conflictingTeacher = await findTeacherAssignedToGrade(assignedGrade);
+    if (conflictingTeacher) {
+      return ApiResponse.error(
+        res,
+        `${assignedGrade} is already assigned to another teacher (${conflictingTeacher.name}).`,
+        400
+      );
+    }
+  }
+
   const temporaryPassword = generateTemporaryPassword();
   const user = await User.create({
     name: name || normalizedEmail.split('@')[0],
     email: normalizedEmail,
     password: temporaryPassword,
     phone,
-    role: role || ROLES.ADMIN,
+    role: effectiveRole,
+    assignedGrade: effectiveRole === ROLES.ADMIN ? assignedGrade : undefined,
     mustChangePassword: true,
     assignedBy: req.user.id,
   });
@@ -185,7 +208,7 @@ const resendInvitation = asyncHandler(async (req, res) => {
  * @access  Private/SuperSuperAdmin, SuperAdmin
  */
 const updateUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, role, isActive } = req.body;
+  const { name, email, phone, role, isActive, assignedGrade } = req.body;
 
   const user = await User.findById(req.params.id);
   if (!user) {
@@ -204,6 +227,20 @@ const updateUser = asyncHandler(async (req, res) => {
     );
   }
 
+  // Prevent Super Admin from promoting anyone to Super Admin/Super Super Admin
+  if (
+    req.user.role === ROLES.SUPER_ADMIN &&
+    role &&
+    role !== ROLES.ADMIN &&
+    role !== user.role
+  ) {
+    return ApiResponse.error(
+      res,
+      'Super Admin can only assign the Admin/Teacher role.',
+      403
+    );
+  }
+
   // Cannot change own role
   if (req.user.id === req.params.id && role && role !== user.role) {
     return ApiResponse.error(res, 'You cannot change your own role.', 400);
@@ -215,6 +252,20 @@ const updateUser = asyncHandler(async (req, res) => {
   if (phone !== undefined) updates.phone = phone;
   if (role !== undefined) updates.role = role;
   if (isActive !== undefined) updates.isActive = isActive;
+  if (assignedGrade !== undefined) updates.assignedGrade = assignedGrade;
+  if ((role || user.role) !== ROLES.ADMIN) updates.assignedGrade = undefined;
+
+  // A class/grade can only be assigned to one teacher at a time
+  if ((role || user.role) === ROLES.ADMIN && updates.assignedGrade) {
+    const conflictingTeacher = await findTeacherAssignedToGrade(updates.assignedGrade, user._id);
+    if (conflictingTeacher) {
+      return ApiResponse.error(
+        res,
+        `${updates.assignedGrade} is already assigned to another teacher (${conflictingTeacher.name}).`,
+        400
+      );
+    }
+  }
 
   const previousState = {
     name: user.name,

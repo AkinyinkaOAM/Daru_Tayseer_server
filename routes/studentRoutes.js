@@ -3,7 +3,7 @@ const { body } = require('express-validator');
 const router = express.Router();
 const validate = require('../middleware/validate');
 const { protect } = require('../middleware/auth');
-const { isAdminOrAbove, isSuperSuperAdmin } = require('../middleware/roles');
+const { isAdminOrAbove, isSuperAdminOrAbove } = require('../middleware/roles');
 const { GRADE_LEVELS } = require('../utils/constants');
 const {
   getStudents,
@@ -12,10 +12,14 @@ const {
   updateStudent,
   deleteStudent,
   bulkCreateStudents,
+  getGradeStats,
 } = require('../controllers/studentController');
 
 // All routes require authentication and at least Admin role
 router.use(protect);
+
+// @route   GET /api/students/stats/grades
+router.get('/stats/grades', isAdminOrAbove, getGradeStats);
 
 // @route   POST /api/students/bulk
 router.post(
@@ -38,10 +42,6 @@ router
     [
       body('firstName').notEmpty().withMessage('First name is required').trim(),
       body('lastName').notEmpty().withMessage('Last name is required').trim(),
-      body('admissionNumber')
-        .notEmpty()
-        .withMessage('Admission number is required')
-        .trim(),
       body('grade')
         .isIn(GRADE_LEVELS)
         .withMessage(`Grade must be one of: ${GRADE_LEVELS.join(', ')}`),
@@ -65,7 +65,7 @@ router
   .get(isAdminOrAbove, getStudent)
   .put(isAdminOrAbove, updateStudent)
   .delete(
-    isSuperSuperAdmin,
+    isSuperAdminOrAbove,
     body('password').notEmpty().withMessage('Your password is required to delete a student.'),
     validate,
     deleteStudent

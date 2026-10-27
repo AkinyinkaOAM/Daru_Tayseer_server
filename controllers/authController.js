@@ -248,6 +248,28 @@ const logout = asyncHandler(async (req, res) => {
   ApiResponse.success(res, 'Logged out successfully.');
 });
 
+/**
+ * @desc    Verify the logged-in user's own password (used to unlock protected
+ *          actions like broadsheet editing) without changing anything.
+ * @route   POST /api/auth/verify-password
+ * @access  Private
+ */
+const verifyPassword = asyncHandler(async (req, res) => {
+  const { password } = req.body;
+
+  if (!password) {
+    return ApiResponse.error(res, 'Password is required.', 400);
+  }
+
+  const user = await User.findById(req.user.id).select('+password');
+  const isMatch = await user.comparePassword(password);
+  if (!isMatch) {
+    return ApiResponse.error(res, 'Incorrect password.', 401);
+  }
+
+  ApiResponse.success(res, 'Password verified.');
+});
+
 module.exports = {
   login,
   getMe,
@@ -255,5 +277,6 @@ module.exports = {
   forgotPassword,
   resetPassword,
   logout,
+  verifyPassword,
 };
 

@@ -4,14 +4,23 @@ const { protect } = require('../middleware/auth');
 const { isAdminOrAbove } = require('../middleware/roles');
 const {
 	getBroadsheet,
+	getBroadsheetOptions,
+	getStudentReport,
+	saveStudentReport,
 	exportBroadsheetCsv,
 	exportPaymentsCsv,
 } = require('../controllers/reportController');
 
-router.use(protect, isAdminOrAbove);
+router.use(protect);
 
-router.get('/broadsheet', getBroadsheet);
-router.get('/broadsheet/csv', exportBroadsheetCsv);
-router.get('/payments/csv', exportPaymentsCsv);
+// Access control (student-owns-record / teacher-owns-class / super admins) is enforced in the controller.
+router.get("/student/:studentId", getStudentReport);
+router.put("/student/:studentId", saveStudentReport);
+
+router.get('/broadsheet', isAdminOrAbove, getBroadsheet);
+router.get('/broadsheet/options', isAdminOrAbove, getBroadsheetOptions);
+router.get('/broadsheet/csv', isAdminOrAbove, exportBroadsheetCsv);
+router.get('/payments/csv', isAdminOrAbove, exportPaymentsCsv);
+
 
 module.exports = router;

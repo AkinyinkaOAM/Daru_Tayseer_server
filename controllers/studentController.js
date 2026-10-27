@@ -2,15 +2,29 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const ApiResponse = require('../utils/ApiResponse');
 const asyncHandler = require('../utils/asyncHandler');
-const { PAGINATION, STUDENT_STATUS, ROLES } = require('../utils/constants');
-const { sendStudentCredentialsEmail } = require('../services/emailService');
+const { PAGINATION, STUDENT_STATUS, ROLES, GRADE_LEVELS } = require('../utils/constants');
+const { sendParentNewStudentEmail } = require('../services/emailService');
+const { getOrCreateSubjectCourses } = require('../services/classSubjectService');
+
+// Admin/teacher accounts are restricted to their own assigned class; super admins see everything.
+const isRestrictedToOwnGrade = (user) => user.role === ROLES.ADMIN;
 
 /**
- * Generate a unique username for student
+ * Generate the next sequential admission number for the given year, e.g. "DTS20260001"
  */
-const generateUsername = (firstName, lastName) => {
-  const randomNum = Math.floor(1000 + Math.random() * 9000);
-  return `${firstName.toLowerCase().slice(0, 5)}${lastName.toLowerCase().slice(0, 3)}${randomNum}`;
+const generateAdmissionNumber = async (year) => {
+  const prefix = `DTS${year}`;
+  const lastStudent = await Student.findOne({
+    admissionNumber: { $regex: `^${prefix}\\d{4}$` },
+  }).sort({ admissionNumber: -1 });
+
+  let nextSeq = 1;
+  if (lastStudent) {
+    const lastSeq = parseInt(lastStudent.admissionNumber.slice(prefix.length), 10);
+    if (!Number.isNaN(lastSeq)) nextSeq = lastSeq + 1;
+  }
+
+  return `${prefix}${String(nextSeq).padStart(4, '0')}`;
 };
 
 /**
@@ -66,7 +80,8 @@ const getStudents = asyncHandler(async (req, res) => {
   // Build filter
   const filter = {};
   if (req.query.grade) filter.grade = req.query.grade;
-  if (req.query.status) filter.status = req.query.status;
+  // Exclude soft-deleted (inactive) students unless a status is explicitly requested
+  filter.status = req.query.status || { $ne: STUDENT_STATUS.INACTIVE };
   if (req.query.search) {
     filter.$or = [
       { firstName: { $regex: req.query.search, $options: 'i' } },
@@ -104,7 +119,8 @@ const getStudents = asyncHandler(async (req, res) => {
  */
 const getStudent = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.params.id)
-    .populate('createdBy', 'name email');
+    .populate('createdBy', 'name email')
+    .populate('courses', 'name code category');
 
   if (!student) {
     return ApiResponse.error(res, 'Student not found.', 404);
@@ -122,7 +138,6 @@ const createStudent = asyncHandler(async (req, res) => {
   const {
     firstName,
     lastName,
-    admissionNumber,
     dateOfBirth,
     gender,
     grade,
@@ -130,78 +145,68 @@ const createStudent = asyncHandler(async (req, res) => {
     parentEmail,
     parentPhone,
     parentAddress,
-    courses,
     feePaid,
     feeBalance,
   } = req.body;
 
-  // Check for duplicate admission number
-  const existingStudent = await Student.findOne({ admissionNumber });
-  if (existingStudent) {
-    return ApiResponse.error(
-      res,
-      `A student with admission number '${admissionNumber}' already exists.`,
-      400
-    );
+  if (isRestrictedToOwnGrade(req.user) && grade !== req.user.assignedGrade) {
+    return ApiResponse.error(res, 'You can only create students for your assigned class.', 403);
   }
 
-  // Generate username and temp password
-  const username = generateUsername(firstName, lastName);
-  const tempPassword = generateTempPassword();
+  // Students do not log in; only the parent account needs credentials, keyed
+  // by parentEmail so siblings are grouped under the same parent.
   const { parentUser, parentPassword } = await ensureParentUser({
     parentName,
     parentEmail,
     reqUserId: req.user.id,
   });
 
-  const student = await Student.create({
-    firstName,
-    lastName,
-    admissionNumber,
-    dateOfBirth,
-    gender,
-    grade,
-    parentName,
-    parentEmail,
-    parentPhone,
-    parentAddress,
-    parentUser: parentUser._id,
-    username,
-    tempPassword,
-    courses: Array.isArray(courses) ? courses : [],
-    feePaid: feePaid || 0,
-    feeBalance: feeBalance || 0,
-    createdBy: req.user.id,
-  });
+  // Subjects are automatically assigned based on the selected class
+  const courses = await getOrCreateSubjectCourses(grade, req.user.id);
 
-  const portalEmail = `${username}@dtsportal.local`;
-  const portalPassword = tempPassword;
-
-  const existingPortalUser = await User.findOne({ email: portalEmail });
-  if (!existingPortalUser) {
-    await User.create({
-      name: student.fullName,
-      email: portalEmail,
-      password: portalPassword,
-      role: ROLES.STUDENT,
-      mustChangePassword: true,
-      studentId: student._id,
-      assignedBy: req.user.id,
-    });
+  const currentYear = new Date().getFullYear();
+  let student;
+  // Retry a couple of times in the unlikely event two requests race for the same sequence number
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const admissionNumber = await generateAdmissionNumber(currentYear);
+    try {
+      student = await Student.create({
+        firstName,
+        lastName,
+        admissionNumber,
+        dateOfBirth,
+        gender,
+        grade,
+        parentName,
+        parentEmail,
+        parentPhone,
+        parentAddress,
+        parentUser: parentUser._id,
+        courses,
+        feePaid: feePaid || 0,
+        feeBalance: feeBalance || 0,
+        createdBy: req.user.id,
+      });
+      break;
+    } catch (error) {
+      const isDuplicateAdmissionNumber = error.code === 11000 && error.keyPattern?.admissionNumber;
+      if (!isDuplicateAdmissionNumber || attempt === 2) throw error;
+    }
   }
 
-  // Send credentials email to parent
+  // Notify the parent; include parent portal credentials only if the account is new
   try {
-    await sendStudentCredentialsEmail({
+    await sendParentNewStudentEmail({
       parentEmail: student.parentEmail,
       parentName: student.parentName,
       studentName: student.fullName,
-      username: student.username,
-      tempPassword,
+      admissionNumber: student.admissionNumber,
       grade: student.grade,
+      parentPortalEmail: parentUser.email,
+      parentPassword,
     });
   } catch (emailError) {
-    console.error('Failed to send credentials email:', emailError.message);
+    console.error('Failed to send parent notification email:', emailError.message);
     // Don't fail the request, but notify the admin
     return ApiResponse.created(res, 'Student created but email notification failed. Please check email configuration.', {
       student,
@@ -209,16 +214,12 @@ const createStudent = asyncHandler(async (req, res) => {
     });
   }
 
-  ApiResponse.created(res, 'Student created successfully. Credentials sent to parent email.', {
+  ApiResponse.created(res, 'Student created successfully. Parent has been notified by email.', {
     student,
-    portalCredentials: {
-      email: portalEmail,
-      password: portalPassword,
-    },
-    parentPortalCredentials: {
+    parentPortalCredentials: parentPassword ? {
       email: parentUser.email,
       password: parentPassword,
-    },
+    } : undefined,
     emailStatus: 'sent',
   });
 });
@@ -245,7 +246,6 @@ const updateStudent = asyncHandler(async (req, res) => {
     'parentEmail',
     'parentPhone',
     'parentAddress',
-    'courses',
     'feePaid',
     'feeBalance',
     'profileImageUrl',
@@ -257,6 +257,11 @@ const updateStudent = asyncHandler(async (req, res) => {
       updates[field] = req.body[field];
     }
   });
+
+  // Re-assign subjects automatically whenever the class changes
+  if (updates.grade && updates.grade !== student.grade) {
+    updates.courses = await getOrCreateSubjectCourses(updates.grade, req.user.id);
+  }
 
   if (updates.parentEmail && updates.parentEmail !== student.parentEmail) {
     const { parentUser } = await ensureParentUser({
@@ -296,8 +301,10 @@ const deleteStudent = asyncHandler(async (req, res) => {
     return ApiResponse.error(res, 'Student not found.', 404);
   }
 
+  // Only validate the field being changed; legacy documents may have stale
+  // values (e.g. grade) that no longer match current schema enums.
   student.status = STUDENT_STATUS.INACTIVE;
-  await student.save();
+  await student.save({ validateModifiedOnly: true });
 
   ApiResponse.success(res, 'Student deactivated successfully.');
 });
@@ -322,35 +329,48 @@ const bulkCreateStudents = asyncHandler(async (req, res) => {
     return ApiResponse.error(res, 'Maximum 50 students per bulk upload.', 400);
   }
 
+  if (isRestrictedToOwnGrade(req.user) && students.some((s) => s.grade !== req.user.assignedGrade)) {
+    return ApiResponse.error(res, 'You can only create students for your assigned class.', 403);
+  }
+
   const results = { created: [], failed: [] };
+  const currentYear = new Date().getFullYear();
 
   for (const studentData of students) {
     try {
-      const username = generateUsername(studentData.firstName, studentData.lastName);
-      const tempPassword = generateTempPassword();
-      const { parentUser } = await ensureParentUser({
+      const { parentUser, parentPassword } = await ensureParentUser({
         parentName: studentData.parentName,
         parentEmail: studentData.parentEmail,
         reqUserId: req.user.id,
       });
 
-      const student = await Student.create({
-        ...studentData,
-        parentUser: parentUser._id,
-        username,
-        tempPassword,
-        createdBy: req.user.id,
-      });
+      let student;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const admissionNumber = await generateAdmissionNumber(currentYear);
+        try {
+          student = await Student.create({
+            ...studentData,
+            admissionNumber,
+            parentUser: parentUser._id,
+            createdBy: req.user.id,
+          });
+          break;
+        } catch (error) {
+          const isDuplicateAdmissionNumber = error.code === 11000 && error.keyPattern?.admissionNumber;
+          if (!isDuplicateAdmissionNumber || attempt === 2) throw error;
+        }
+      }
 
-      // Send email
+      // Notify the parent
       try {
-        await sendStudentCredentialsEmail({
+        await sendParentNewStudentEmail({
           parentEmail: student.parentEmail,
           parentName: student.parentName,
           studentName: student.fullName,
-          username: student.username,
-          tempPassword,
+          admissionNumber: student.admissionNumber,
           grade: student.grade,
+          parentPortalEmail: parentUser.email,
+          parentPassword,
         });
       } catch (emailErr) {
         console.error(`Email failed for ${student.fullName}:`, emailErr.message);
@@ -370,6 +390,34 @@ const bulkCreateStudents = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * @desc    Get student counts grouped by class/grade
+ * @route   GET /api/students/stats/grades
+ * @access  Private/Admin+
+ */
+const getGradeStats = asyncHandler(async (req, res) => {
+  const stats = await Student.aggregate([
+    { $match: { status: { $ne: STUDENT_STATUS.INACTIVE } } },
+    { $group: { _id: '$grade', count: { $sum: 1 } } },
+  ]);
+
+  const countsByGrade = stats.reduce((acc, item) => {
+    acc[item._id] = item.count;
+    return acc;
+  }, {});
+
+  const grades = GRADE_LEVELS.map((grade) => ({
+    grade,
+    studentCount: countsByGrade[grade] || 0,
+  }));
+
+  ApiResponse.success(res, 'Grade stats retrieved successfully', {
+    grades,
+    totalClasses: GRADE_LEVELS.length,
+    totalStudents: grades.reduce((sum, g) => sum + g.studentCount, 0),
+  });
+});
+
 module.exports = {
   getStudents,
   getStudent,
@@ -377,5 +425,6 @@ module.exports = {
   updateStudent,
   deleteStudent,
   bulkCreateStudents,
+  getGradeStats,
 };
 

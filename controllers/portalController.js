@@ -82,7 +82,9 @@ const uploadStudentProfileImage = asyncHandler(async (req, res) => {
 const getParentPortalSummary = asyncHandler(async (req, res) => {
   const wards = await Student.find({
     $or: [{ parentUser: req.user._id }, { parentEmail: req.user.email }],
-  }).sort({ firstName: 1 });
+  })
+    .populate('courses', 'name code category')
+    .sort({ firstName: 1 });
 
   if (!wards.length) {
     return ApiResponse.success(res, 'No wards linked to this parent account yet.', {

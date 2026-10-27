@@ -5,6 +5,10 @@ const ApiResponse = require('../utils/ApiResponse');
 const asyncHandler = require('../utils/asyncHandler');
 const { PAGINATION, SCORE_STATUS } = require('../utils/constants');
 
+// Escape regex metacharacters so subject names like "Taoheed (Monotheism)" are
+// matched literally instead of being parsed as regex syntax.
+const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * @desc    Get all scores (paginated, filterable)
  * @route   GET /api/scores
@@ -22,7 +26,7 @@ const getScores = asyncHandler(async (req, res) => {
   const filter = {};
   if (req.query.student) filter.student = req.query.student;
   if (req.query.grade) filter.grade = req.query.grade;
-  if (req.query.subject) filter.subject = { $regex: req.query.subject, $options: 'i' };
+  if (req.query.subject) filter.subject = { $regex: escapeRegex(req.query.subject), $options: 'i' };
   if (req.query.term) filter.term = req.query.term;
   if (req.query.session) filter.session = req.query.session;
   if (req.query.status) filter.status = req.query.status;
@@ -93,7 +97,7 @@ const createScore = asyncHandler(async (req, res) => {
   // Check for duplicate score entry
   const existingScore = await Score.findOne({
     student,
-    subject: { $regex: `^${subject}$`, $options: 'i' },
+    subject: { $regex: `^${escapeRegex(subject)}$`, $options: 'i' },
     term,
     session,
   });
@@ -206,7 +210,8 @@ const deleteScore = asyncHandler(async (req, res) => {
 });
 
 /**
- * @desc    Bulk upload scores
+ * @desc    Bulk upload scores (creates new entries or updates existing
+ *          draft entries for the same student/subject/term/session)
  * @route   POST /api/scores/bulk
  * @access  Private/Admin+
  */
@@ -225,6 +230,31 @@ const bulkCreateScores = asyncHandler(async (req, res) => {
 
   for (const scoreData of scores) {
     try {
+      const existingScore = await Score.findOne({
+        student: scoreData.student,
+        subject: { $regex: `^${escapeRegex(scoreData.subject)}$`, $options: 'i' },
+        term: scoreData.term,
+        session: scoreData.session,
+      });
+
+      if (existingScore) {
+        if (existingScore.status === SCORE_STATUS.PUBLISHED) {
+          throw new Error('Cannot update a published score. Contact Super Admin.');
+        }
+        if (scoreData.continuousAssessment !== undefined) {
+          existingScore.continuousAssessment = scoreData.continuousAssessment;
+        }
+        if (scoreData.examScore !== undefined) {
+          existingScore.examScore = scoreData.examScore;
+        }
+        if (scoreData.remarks !== undefined) {
+          existingScore.remarks = scoreData.remarks;
+        }
+        await existingScore.save();
+        results.created.push(existingScore);
+        continue;
+      }
+
       const score = await Score.create({
         ...scoreData,
         uploadedBy: req.user.id,

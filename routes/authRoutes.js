@@ -11,6 +11,7 @@ const {
   forgotPassword,
   resetPassword,
   logout,
+  verifyPassword,
 } = require('../controllers/authController');
 
 // @route   POST /api/auth/login
@@ -64,6 +65,15 @@ router.put(
 
 // @route   POST /api/auth/logout
 router.post('/logout', protect, logout);
+
+// @route   POST /api/auth/verify-password
+router.post(
+  '/verify-password',
+  protect,
+  [body('password').notEmpty().withMessage('Password is required')],
+  validate,
+  verifyPassword
+);
 
 module.exports = router;
 

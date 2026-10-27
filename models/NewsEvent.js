@@ -45,11 +45,10 @@ const NewsEventSchema = new mongoose.Schema(
   }
 );
 
-NewsEventSchema.pre('save', function (next) {
+NewsEventSchema.pre('save', function () {
   if (this.isModified('isPublished') && this.isPublished && !this.publishedAt) {
     this.publishedAt = Date.now();
   }
-  next();
 });
 
 module.exports = mongoose.model('NewsEvent', NewsEventSchema);

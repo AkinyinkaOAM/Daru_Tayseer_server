@@ -6,7 +6,8 @@ const ScoreSchema = new mongoose.Schema(
     student: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Student',
-      required: [true, 'Please provide student'],
+      required: [true, 'Please provide student'], 
+      index: true,
     },
     subject: {
       type: String,
@@ -31,13 +32,13 @@ const ScoreSchema = new mongoose.Schema(
     continuousAssessment: {
       type: Number,
       min: 0,
-      max: 40,
+      max: 30,
       default: 0,
     },
     examScore: {
       type: Number,
       min: 0,
-      max: 60,
+      max: 70,
       default: 0,
     },
     total: {
@@ -73,17 +74,35 @@ const ScoreSchema = new mongoose.Schema(
 );
 
 // Pre-save hook to calculate total and grade letter
-ScoreSchema.pre('save', function (next) {
+ScoreSchema.pre('save', function () {
   this.total = (this.continuousAssessment || 0) + (this.examScore || 0);
 
-  if (this.total >= 75) this.gradeLetter = 'A';
-  else if (this.total >= 65) this.gradeLetter = 'B';
-  else if (this.total >= 55) this.gradeLetter = 'C';
-  else if (this.total >= 45) this.gradeLetter = 'D';
-  else if (this.total >= 40) this.gradeLetter = 'E';
-  else this.gradeLetter = 'F';
+  // if (this.total >= 75) this.gradeLetter = 'A';
+  // else if (this.total >= 65) this.gradeLetter = 'B';
+  // else if (this.total >= 55) this.gradeLetter = 'C';
+  // else if (this.total >= 45) this.gradeLetter = 'D';
+  // else if (this.total >= 40) this.gradeLetter = 'E';
+  // else this.gradeLetter = 'F';
 
-  next();
+  if (this.total >= 70) {
+    this.gradeLetter = "A";
+    this.remarks = "Excellent";
+  } else if (this.total >= 60) {
+    this.gradeLetter = "B";
+    this.remarks = "Very Good";
+  } else if (this.total >= 50) {
+    this.gradeLetter = "C";
+    this.remarks = "Good";
+  } else if (this.total >= 45) {
+    this.gradeLetter = "D";
+    this.remarks = "Average";
+  } else if (this.total >= 40) {
+    this.gradeLetter = "E";
+    this.remarks = "Passed";
+  } else {
+    this.gradeLetter = "F";
+    this.remarks = "Failed";
+  }
 });
 
 // Prevent duplicate score entry for same student, subject, term, session

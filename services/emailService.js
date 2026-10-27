@@ -4,10 +4,11 @@ const nodemailer = require('nodemailer');
  * Create Nodemailer transporter using Gmail SMTP
  */
 const createTransporter = () => {
+  const port = parseInt(process.env.EMAIL_PORT) || 587;
   return nodemailer.createTransport({
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.EMAIL_PORT) || 587,
-    secure: false, // true for 465, false for others
+    port,
+    secure: port === 465, // true for the implicit-TLS port, false for STARTTLS ports like 587
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
@@ -45,54 +46,62 @@ const sendEmail = async (options) => {
 };
 
 /**
- * Send student account creation email to parent
+ * Notify a parent that a new ward was added to their account, sharing parent
+ * portal login credentials only when a new parent account was just created.
  * @param {Object} options
- * @param {string} options.parentEmail - Parent's email
+ * @param {string} options.parentEmail - Parent's email (notification recipient)
  * @param {string} options.parentName - Parent's name
  * @param {string} options.studentName - Student's full name
- * @param {string} options.username - Student's username
- * @param {string} options.tempPassword - Temporary password
+ * @param {string} options.admissionNumber - Student's admission number
  * @param {string} options.grade - Student's grade/class
+ * @param {string} [options.parentPortalEmail] - Parent's portal login email
+ * @param {string} [options.parentPassword] - Temporary password (only set for new parent accounts)
  */
-const sendStudentCredentialsEmail = async (options) => {
-  const subject = 'Welcome to Daaru Tayseer School - Student Account Created';
+const sendParentNewStudentEmail = async (options) => {
+  const subject = 'Daaru Tayseer School - Ward Registered';
+  const portalUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const credentialsBlock = options.parentPassword
+    ? `
+      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #2c3e50; margin-top: 0;">Your Parent Portal Login</h3>
+        <p><strong>Email:</strong> ${options.parentPortalEmail}</p>
+        <p><strong>Temporary Password:</strong> ${options.parentPassword}</p>
+      </div>
+      <div style="background-color: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
+        <p style="margin: 0; color: #856404;">
+          <strong>⚠ Important:</strong> Please log in and change your password immediately for security purposes.
+        </p>
+      </div>
+    `
+    : '';
+
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
       <div style="text-align: center; margin-bottom: 30px;">
         <h1 style="color: #2c3e50; margin-bottom: 5px;">Daaru Tayseer School</h1>
         <p style="color: #7f8c8d; font-size: 14px;">Knowledge, Faith, Character</p>
       </div>
-      
+
       <p>Dear <strong>${options.parentName}</strong>,</p>
-      
-      <p>We are pleased to inform you that a student account has been created for <strong>${options.studentName}</strong> at Daaru Tayseer School.</p>
-      
+
+      <p>We are pleased to inform you that <strong>${options.studentName}</strong> has been registered at Daaru Tayseer School.</p>
+
       <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-        <h3 style="color: #2c3e50; margin-top: 0;">Student Login Credentials</h3>
+        <h3 style="color: #2c3e50; margin-top: 0;">Student Details</h3>
         <p><strong>Full Name:</strong> ${options.studentName}</p>
+        <p><strong>Admission Number:</strong> ${options.admissionNumber}</p>
         <p><strong>Grade/Class:</strong> ${options.grade}</p>
-        <p><strong>Username:</strong> ${options.username}</p>
-        <p><strong>Temporary Password:</strong> ${options.tempPassword}</p>
       </div>
-      
-      <div style="background-color: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
-        <p style="margin: 0; color: #856404;">
-          <strong>⚠ Important:</strong> Please ask your ward to log in and change the password immediately for security purposes.
-        </p>
-      </div>
-      
-      <p><strong>How to Login:</strong></p>
-      <ol style="color: #333;">
-        <li>Visit our school portal at <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" style="color: #3498db;">${process.env.FRONTEND_URL || 'http://localhost:3000'}</a></li>
-        <li>Enter the username and temporary password provided above</li>
-        <li>You will be prompted to create a new password</li>
-      </ol>
-      
+
+      ${credentialsBlock}
+
+      <p>Use the parent portal at <a href="${portalUrl}" style="color: #3498db;">${portalUrl}</a> to view your ward's academic records, scores and fee balance.</p>
+
       <p>If you have any questions or concerns, please contact the school administration.</p>
-      
+
       <p>Best regards,<br>
       <strong>Daaru Tayseer School Administration</strong></p>
-      
+
       <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
       <p style="color: #95a5a6; font-size: 12px; text-align: center;">
         This is an automated message. Please do not reply directly to this email.
@@ -190,7 +199,7 @@ const sendPasswordResetEmail = async (options) => {
 
 module.exports = {
   sendEmail,
-  sendStudentCredentialsEmail,
+  sendParentNewStudentEmail,
   sendUserCredentialsEmail,
   sendPasswordResetEmail,
 };
